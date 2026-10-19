@@ -92,8 +92,8 @@ func TestAStrayDeleteIsRefused(t *testing.T) {
 }
 
 // The marker allows deleting exactly the rows it covers, in its own
-// transaction before it commits: none past "through", none of another
-// stream.
+// transaction before it commits: none past "through". (None of another
+// stream either: TestAMarkerAllowsNoOtherStreamsRows.)
 func TestAMarkerAllowsDeletingOnlyTheRowsItCovers(t *testing.T) {
 	s := openTestStore(t)
 	acceptAll(t, s, newTask("task-1"), renamed("task-1"), newTask("task-2"), renamed("task-1"))
@@ -111,9 +111,6 @@ func TestAMarkerAllowsDeletingOnlyTheRowsItCovers(t *testing.T) {
 		}
 		if _, err := deleteIn(tx, "task-1", 4, 4); !refusedAsAppendOnly(err) {
 			t.Errorf("a row past through: %v, want refused", err)
-		}
-		if _, err := deleteIn(tx, "task-2", 3, 3); !refusedAsAppendOnly(err) {
-			t.Errorf("another stream's row: %v, want refused", err)
 		}
 	})
 	var left []int64
