@@ -68,7 +68,7 @@ type savedState struct {
 	TasksMade   int
 	OwnedOrder  map[string][]savedPlace
 	Broken      []string
-	Archived    map[string]bool
+	Archived    map[string]tasks.Summary
 	Roster      agents.Saved
 	Workers     workers.Saved
 	Connections connections.Saved

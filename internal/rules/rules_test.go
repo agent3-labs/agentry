@@ -740,7 +740,10 @@ func TestAnArchivedTaskTakesNoEvents(t *testing.T) {
 			t.Fatal(p.Type, rejection, err)
 		}
 	}
-	state.Archive("task-1")
+	if _, rejection, err := s.Propose(events.Proposal{Stream: "task-1", Actor: you, Type: events.TaskDone, Data: map[string]any{"summary": "s", "moved": true}}); rejection != nil || err != nil {
+		t.Fatal(rejection, err)
+	}
+	archive(t, s, state, "task-1")
 
 	for _, p := range []events.Proposal{
 		{Stream: "task-1", Actor: you, Type: events.TaskCreated, Data: created.data},

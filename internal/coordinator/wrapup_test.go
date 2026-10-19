@@ -283,7 +283,7 @@ func TestAnArchivedTaskHoldsNoPort(t *testing.T) {
 		propose(t, s, events.Proposal{Stream: id, Actor: worker, Type: events.WorktreeReady, Data: map[string]any{"path": "/w/" + id, "branch": "b", "port": 7901 + i}})
 	}
 	propose(t, s, events.Proposal{Stream: "task-2", Actor: you, Type: events.TaskDone, Data: map[string]any{"summary": "Moved.", "moved": true}})
-	state.Archive("task-2")
+	storetest.Archive(t, s, state, "task-2")
 
 	if ports := (&Loop{store: s, state: state}).portsInUse(workers.Local); !slices.Equal(ports, []int{7901}) {
 		t.Errorf("ports in use %v: want only the working task's", ports)
@@ -301,7 +301,7 @@ func TestAStoryAfterAnArchivedTaskStarts(t *testing.T) {
 		propose(t, s, events.Proposal{Stream: id, Actor: you, Type: events.TaskCreated, Data: map[string]any{"title": id, "repo": "/r", "coordinator": "tech-lead"}})
 	}
 	propose(t, s, events.Proposal{Stream: "task-1", Actor: you, Type: events.TaskDone, Data: map[string]any{"summary": "Shipped.", "moved": true}})
-	state.Archive("task-1")
+	storetest.Archive(t, s, state, "task-1")
 
 	loop := &Loop{store: s, state: state}
 	if loop.blocked(&tasks.Task{After: []string{"task-1"}}) {

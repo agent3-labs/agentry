@@ -42,16 +42,7 @@ func Equal(s *store.Store, state *State) error {
 		return err
 	}
 	for _, id := range index.tasks {
-		if held.archived[id] {
-			// No event archives a task yet, so only a test's Archive makes
-			// one, and the log has nothing to compare it with. Its place in
-			// the order and its stream's position are still compared. The
-			// archiver story replaces this skip: it compares the summary
-			// here against tasks.Archived of a replay (log-growth.md, "What
-			// task-21 should leave room for", item 6).
-			continue
-		}
-		if err := equalStream(s, cut, id, tasks.Replay, func() (any, error) { return held.Task(id) }); err != nil {
+		if err := equalTask(s, cut, held, id); err != nil {
 			return err
 		}
 	}
@@ -100,6 +91,38 @@ func equalStream[T any](s *store.Store, cut int64, stream string, replay func([]
 		return err
 	}
 	return equalReplay(stream, upTo(accepted, cut), replay, held)
+}
+
+// equalTask compares a task with a replay of its stream: the whole task,
+// and the summary an archived one keeps, against tasks.Archived of the
+// replay. A broken task has neither, so the first compare is all there is.
+func equalTask(s *store.Store, cut int64, held *State, id string) error {
+	summary, archived := held.archived[id]
+	whole := func() (any, error) {
+		if archived {
+			return (*tasks.Task)(nil), nil // its replay folds to nil too
+		}
+		return held.Task(id)
+	}
+	if err := equalStream(s, cut, id, tasks.Replay, whole); err != nil || held.broken[id] != nil {
+		return err
+	}
+	kept := func() (any, error) {
+		if archived {
+			return &summary, nil
+		}
+		return (*tasks.Summary)(nil), nil
+	}
+	return equalStream(s, cut, id, archivedIn, kept)
+}
+
+// archivedIn is tasks.Archived in the shape of tasks.Replay: nil for a task
+// that isn't archived.
+func archivedIn(accepted []events.Event) (*tasks.Summary, error) {
+	if summary, archived := tasks.Archived(accepted); archived {
+		return &summary, nil
+	}
+	return nil, nil
 }
 
 // upTo is the events, in the log's order, at or before position.
@@ -180,8 +203,8 @@ func differingField(got, want any) string {
 
 // index is the log up to a cut, as Equal compares it.
 type index struct {
-	tasks   []string            // the stream of every accepted task.created, oldest first, in any stream but a foreign one
-	made    int                 // every accepted task.created, a foreign stream's too
+	tasks   []string            // the stream of every accepted task.created, oldest first, in any stream but a foreign one, and of every marker that stands for one
+	made    int                 // every accepted task.created, a foreign stream's too, and every marker that stands for one
 	owned   map[string][]string // by prefix: each owned stream with a Streams, in the order of its first accepted event
 	streams map[string]int64    // each stream's last accepted position
 	skipped tally               // foreign streams and unknown types
@@ -192,6 +215,7 @@ type index struct {
 func indexOf(s *store.Store, held *State, cut int64) (index, error) {
 	const page = 1000
 	found := index{streams: map[string]int64{}, owned: map[string][]string{}, skipped: newTally()}
+	var made []created
 	catalogue := s.Catalogue()
 	for position := int64(0); ; {
 		batch, err := s.After(position, page)
@@ -208,20 +232,30 @@ func indexOf(s *store.Store, held *State, cut int64) (index, error) {
 			first := found.streams[e.Stream] == 0
 			found.skipped.count(catalogue, kind, e, first)
 			found.streams[e.Stream] = e.Position
-			if e.Type == events.TaskCreated {
+			// A marker that starts its stream stands for the task.created
+			// archived with the rest, at the position it names.
+			standsIn := e.Type == events.TaskArchived && first
+			if e.Type == events.TaskCreated || standsIn {
 				found.made++
 			}
 			if kind == events.ForeignStream {
 				continue
 			}
-			if e.Type == events.TaskCreated {
-				found.tasks = append(found.tasks, e.Stream)
+			switch {
+			case e.Type == events.TaskCreated:
+				made = append(made, created{e.Position, e.Stream})
+			case standsIn:
+				made = append(made, created{int64(e.Number("created")), e.Stream})
 			}
 			if owner := held.ownerOf(e.Stream, kind); owner != nil && first {
 				found.owned[owner.Prefix] = append(found.owned[owner.Prefix], e.Stream)
 			}
 		}
 		if len(batch) < page {
+			slices.SortStableFunc(made, byPosition)
+			for _, c := range made {
+				found.tasks = append(found.tasks, c.id)
+			}
 			return found, nil
 		}
 		position = batch[len(batch)-1].Position

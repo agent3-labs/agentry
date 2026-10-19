@@ -2,10 +2,13 @@ package current
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"gitlab.com/dev.chempa/agentry/internal/agents"
 	"gitlab.com/dev.chempa/agentry/internal/events"
 	"gitlab.com/dev.chempa/agentry/internal/ideas"
 	"gitlab.com/dev.chempa/agentry/internal/settings"
@@ -316,18 +320,166 @@ func TestACorruptSnapshotIsKeptOnce(t *testing.T) {
 	}
 }
 
-// The archived set comes back as it was written. No log fills it yet, so
-// it is filled by hand.
-func TestTheArchivedSetSurvivesASnapshot(t *testing.T) {
-	logPath, _ := seededLog(t, someProposals()...)
-	archived := map[string]bool{"task-1": true, "task-2": true}
-	path := snapshotted(t, logPath, 5, func(s *State) { s.archived = maps.Clone(archived) })
-	restored := Restore(path, "build-1", withIdeas, ideas.Streams())
+// archivedLog is the every stream fixture with task-1 archived at the end,
+// as the archiver leaves it: task-1's rows gone, and its marker, keeping
+// the summary the list showed, alone in its stream.
+func archivedLog(t *testing.T) string {
+	t.Helper()
+	path, _ := seededLog(t, someProposals()...)
+	s, err := store.Open(path, withIdeas, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	own, err := s.Stream("task-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	roster, err := s.Stream(events.AgentsStream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	propose(t, s, taskstest.Marker(own, tasks.SummaryOf(tasks.FromEvents(own), agents.FromEvents(roster))))
+	s.Close()
+	return copyOf(t, path, fmt.Sprintf(`DELETE FROM events WHERE stream = 'task-1' AND position <= %d`, own[len(own)-1].Position))
+}
+
+// A marker alone in its stream folds to its summary: the state equals a
+// replay, lists the summary in task-1's place and counts task-1 for the
+// next task, and a snapshot at every position carries the summary.
+func TestAMarkerAloneFoldsToItsSummary(t *testing.T) {
+	logPath := archivedLog(t)
+	state := New(withIdeas, ideas.Streams())
+	s, err := store.Open(logPath, withIdeas, state, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Equal(s, state); err != nil {
+		t.Error(err)
+	}
+	if only, err := s.Stream("task-1"); err != nil || len(only) != 1 || only[0].Type != events.TaskArchived {
+		t.Fatalf("task-1's stream should be its marker alone: %v, %v", only, err)
+	}
+	summaries := state.Summaries()
+	if len(summaries) != 2 || summaries[0].ID != "task-1" || summaries[0].Title != "Speed up the list" || !slices.Equal(summaries[0].Labels, []string{"web"}) {
+		t.Errorf("the summaries are %+v, want task-1's archived one first", summaries)
+	}
+	if next := state.NextTask(); next != "task-4" {
+		t.Errorf("the next task is %s, want task-4", next)
+	}
+	all, err := everyEvent(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	var cuts []int64
+	for _, e := range all {
+		cuts = append(cuts, e.Position)
+	}
+	if err := EqualThroughSnapshots(logPath, withIdeas, t.TempDir(), cuts, ideas.Streams()); err != nil {
+		t.Error(err)
+	}
+	restored := Restore(snapshotted(t, logPath, cuts[len(cuts)-1], nil), "build-1", withIdeas, ideas.Streams())
 	if restored.snapshot == nil {
 		t.Fatal("the snapshot wasn't restored")
 	}
-	if !reflect.DeepEqual(restored.archived, archived) {
-		t.Errorf("restored archived %v, want %v", restored.archived, archived)
+	if !reflect.DeepEqual(restored.archived, state.archived) {
+		t.Errorf("restored summaries %+v, want %+v", restored.archived, state.archived)
+	}
+}
+
+// A task archived and unarchived with its rows in the log, and changed
+// after: a snapshot at every position equals a replay, so a snapshot that
+// holds the summary takes the unarchiving in its tail as a refold.
+func TestASnapshotTakesAnUnarchivingInItsTail(t *testing.T) {
+	path, _ := seededLog(t, someProposals()...)
+	s, err := store.Open(path, withIdeas, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	own, err := s.Stream("task-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker, _, err := s.Propose(taskstest.Marker(own, tasks.SummaryOf(tasks.FromEvents(own), nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	propose(t, s, taskstest.Unarchived("task-1", marker.Position))
+	propose(t, s, proposal("task-1", you, events.TaskRenamed, map[string]any{"title": "Back"}))
+	last := s.LastPosition()
+	s.Close()
+	var cuts []int64
+	for cut := marker.Position - 1; cut <= last; cut++ {
+		cuts = append(cuts, cut)
+	}
+	if err := EqualThroughSnapshots(path, withIdeas, t.TempDir(), cuts, ideas.Streams()); err != nil {
+		t.Error(err)
+	}
+}
+
+// beforeSummaries is the shape of a snapshot's first chunk before the state
+// kept summaries, as far as the archived set goes: a name and a flag.
+type beforeSummaries struct {
+	Position int64
+	Archived map[string]bool
+}
+
+// A snapshot from before the state kept summaries is never read as one
+// with them. Older code is another build, so its snapshot is of no use
+// (the version tag); and even a body of the old shape under this build's
+// tag fails to decode instead of being misread. Either way the whole log
+// replays, the archived task's summary included.
+func TestASnapshotFromBeforeSummariesReplays(t *testing.T) {
+	logPath := archivedLog(t)
+	log, err := store.Open(logPath, withIdeas, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := log.LastPosition()
+	anchor, _, err := log.Hash(last)
+	log.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldShape := func(t *testing.T, path string) string {
+		var body bytes.Buffer
+		if err := writeChunk(&body, beforeSummaries{Position: last, Archived: map[string]bool{"task-1": true}}); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(body.Bytes())
+		line, err := json.Marshal(header{Format: snapshotFormat, Build: "build-1", Position: last, Anchor: anchor,
+			Size: int64(body.Len()), SHA256: hex.EncodeToString(sum[:])})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, append(append(line, '\n'), body.Bytes()...), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	for _, c := range []struct {
+		name   string
+		damage func(t *testing.T, path string) string
+		build  string
+		want   string
+	}{
+		{"older code", nil, "build-2", "from other code"},
+		{"the old shape under this build", oldShape, "build-1", "torn or corrupt"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			path := snapshotted(t, logPath, last, nil)
+			if c.damage != nil {
+				path = c.damage(t, path)
+			}
+			state, logged := opened(t, logPath, path, c.build)
+			if state.resumed != 0 || !strings.Contains(logged, c.want) {
+				t.Errorf("went on from %d, logged %q, want %q in it", state.resumed, logged, c.want)
+			}
+			if summary, archived := state.archived["task-1"]; !archived || summary.Title != "Speed up the list" {
+				t.Errorf("after the replay task-1 is %+v, archived %v", summary, archived)
+			}
+		})
 	}
 }
 

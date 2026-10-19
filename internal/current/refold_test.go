@@ -1,17 +1,20 @@
 package current
 
 import (
+	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"gitlab.com/dev.chempa/agentry/internal/events"
 	"gitlab.com/dev.chempa/agentry/internal/ideas"
+	"gitlab.com/dev.chempa/agentry/internal/tasks"
+	"gitlab.com/dev.chempa/agentry/internal/tasks/taskstest"
 )
 
 // A refold rebuilds its stream from the events before it and itself, as a
-// replay does, whatever the state held for the stream: for each stream, the
-// state is loaded without the stream's last event, a task archived as well,
-// and that event comes last, as a refold.
+// replay does: for each stream, the state is loaded without the stream's
+// last event, and that event comes last, as a refold.
 func TestARefoldEqualsAReplay(t *testing.T) {
 	for _, stream := range streamsOf(everyStream()) {
 		log := everyStream()
@@ -22,12 +25,33 @@ func TestARefoldEqualsAReplay(t *testing.T) {
 		last := own[len(own)-1]
 		log = slices.DeleteFunc(log, func(e events.Event) bool { return e.Position == last.Position })
 		state := loaded(log)
-		if withIdeas.IsTaskStream(stream) {
-			state.Archive(stream)
-		}
 		last.Position = everyStream()[len(everyStream())-1].Position + 1
 		state.Refold(stream, own[:len(own)-1], last)
 		t.Run(stream, func(t *testing.T) { sameAsReplay(t, state, append(log, last)) })
+	}
+}
+
+// A task.unarchived takes back the task its marker set aside, rebuilt from
+// the restored rows before the marker, and the summary goes; with no rows
+// before the marker there is no task to take back, and the stream breaks.
+func TestUnarchivingTakesBackTheWholeTask(t *testing.T) {
+	log := withArchived(false)
+	state := loaded(log)
+	unarchived := events.Event{Position: 101, At: time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC), Proposal: taskstest.Unarchived("task-1", 100)}
+	state.Refold("task-1", accepted(log, "task-1"), unarchived)
+	sameAsReplay(t, state, append(log, unarchived))
+	if task, err := state.Task("task-1"); task == nil || err != nil {
+		t.Errorf("task-1 should be whole again: %v, %v", task, err)
+	}
+	if summaries := state.Summaries(); len(summaries) != 2 || summaries[0].ID != "task-1" || summaries[0].LastActiveAt != unarchived.At {
+		t.Errorf("the summaries are %+v, want task-1's made from the task again", summaries)
+	}
+
+	rowsGone := withArchived(true)
+	state = loaded(rowsGone)
+	state.Refold("task-1", accepted(rowsGone, "task-1"), unarchived)
+	if _, err := state.Task("task-1"); err == nil || errors.Is(err, ErrArchived) {
+		t.Errorf("unarchiving with no rows before the marker: %v, want the stream broken", err)
 	}
 }
 
@@ -59,22 +83,33 @@ func TestEqualHoldsAfterARefold(t *testing.T) {
 	state := New(withIdeas, ideas.Streams())
 	state.Loaded(0)
 	fromTheLog(t, s, state)
-	state.Archive("task-1")
-	for _, stream := range []string{"task-1", "task-3"} {
-		before, err := s.Stream(stream)
+	own, err := s.Stream("task-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker, _, err := s.Propose(taskstest.Marker(own, tasks.SummaryOf(tasks.FromEvents(own), nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromTheLog(t, s, state)
+	if err := Equal(s, state); err != nil {
+		t.Errorf("archived: %v", err)
+	}
+	for _, p := range []events.Proposal{taskstest.Unarchived("task-1", marker.Position), proposal("task-3", you, events.TaskLabeled, map[string]any{"labels": []any{"refolded"}})} {
+		before, err := s.Stream(p.Stream)
 		if err != nil {
 			t.Fatal(err)
 		}
-		e, _, err := s.Propose(proposal(stream, you, events.TaskLabeled, map[string]any{"labels": []any{"refolded"}}))
+		e, _, err := s.Propose(p)
 		if err != nil {
 			t.Fatal(err)
 		}
-		state.Refold(stream, before, e)
+		state.Refold(p.Stream, before, e)
 	}
 	if err := Equal(s, state); err != nil {
 		t.Error(err)
 	}
-	if task, err := state.Task("task-1"); err != nil || task == nil || !slices.Equal(task.Labels, []string{"refolded"}) {
+	if task, err := state.Task("task-1"); err != nil || task == nil || !slices.Equal(task.Labels, []string{"web"}) {
 		t.Errorf("task-1 after its refold: %+v, %v", task, err)
 	}
 	if state.Broken("task-3") == nil {

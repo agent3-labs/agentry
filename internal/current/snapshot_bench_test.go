@@ -57,7 +57,7 @@ func benchSnapshots(t *testing.T, path string, state *current.State, archivable 
 		tail, seconds(tailLimit), seconds(withTail-noTail), tail, seconds(withTail), seconds(noTail))
 
 	for _, task := range archivable {
-		state.Archive(task.ID)
+		state.ArchiveInPlace(tasks.SummaryOf(task, state.Roster()))
 	}
 	working := filepath.Join(dir, "working.snapshot")
 	wrote := minOf3On(1, func() { writeSnapshot(t, working, state, log) })

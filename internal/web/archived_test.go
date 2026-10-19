@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -12,14 +13,15 @@ import (
 	"gitlab.com/dev.chempa/agentry/internal/agents"
 	"gitlab.com/dev.chempa/agentry/internal/events"
 	"gitlab.com/dev.chempa/agentry/internal/storetest"
+	"gitlab.com/dev.chempa/agentry/internal/tasks"
 	"gitlab.com/dev.chempa/agentry/internal/workers"
 )
 
-// An archived task still counts for the next id, but no list shows it and
-// its detail says it is archived. task-2 isn't done, as an archived task
-// would be, so that each reader shows it skips the task, not a done one:
-// it waits for your answer and has a worktree here.
-func TestAnArchivedTaskIsCountedButNotShown(t *testing.T) {
+// An archived task is in the list as its summary and still counts for the
+// next id; its detail says it is archived, and no other reader shows it.
+// task-2 waited for your answer with a worktree here before it was moved to
+// Done and archived; the live tasks' summaries are as before.
+func TestAnArchivedTaskIsListedAsItsSummary(t *testing.T) {
 	s, state := storetest.Open(t, filepath.Join(t.TempDir(), "agentry.db"))
 	for _, p := range agents.SeedProposals(nil) {
 		s.Propose(p)
@@ -40,17 +42,27 @@ func TestAnArchivedTaskIsCountedButNotShown(t *testing.T) {
 			t.Fatal(p.Type, rejection, err)
 		}
 	}
-	state.Archive("task-2")
-
 	_, body := call(t, server, "GET", "/api/tasks", "")
+	var before []taskSummary
+	json.Unmarshal([]byte(body), &before)
+	storetest.Archive(t, s, state, "task-2")
+	archived := state.Summaries()[1] // task-2's: they are in the order the tasks were made
+
+	_, body = call(t, server, "GET", "/api/tasks", "")
 	var list []taskSummary
 	json.Unmarshal([]byte(body), &list)
 	var listed []string
 	for _, summary := range list {
 		listed = append(listed, summary.ID)
 	}
-	if !slices.Equal(listed, []string{"task-3", "task-1"}) {
-		t.Errorf("the list shows %v, want task-3 and task-1", listed)
+	if !slices.Equal(listed, []string{"task-3", "task-2", "task-1"}) {
+		t.Fatalf("the list shows %v, want task-3, task-2 and task-1", listed)
+	}
+	if !reflect.DeepEqual(list[0], before[0]) || !reflect.DeepEqual(list[2], before[2]) {
+		t.Errorf("the live tasks' summaries changed:\n%+v\nwant\n%+v", list, before)
+	}
+	if list[1].Status != tasks.Done || list[1].Title != "Two" || !reflect.DeepEqual(list[1], archived) {
+		t.Errorf("task-2 is listed as %+v, want its marker's summary %+v", list[1], archived)
 	}
 	if code, body := call(t, server, "GET", "/api/tasks/task-2", ""); code != http.StatusGone || !strings.Contains(body, "task-2 is archived") {
 		t.Errorf("an archived task's detail: %d %s", code, body)
@@ -73,6 +85,11 @@ func TestAnArchivedTaskIsCountedButNotShown(t *testing.T) {
 	if code, body := call(t, server, "PUT", "/api/tasks/task-2/rank", `{"rank":1}`); code != http.StatusConflict || !strings.Contains(body, "task-2 is archived") {
 		t.Errorf("an archived task took an event: %d %s", code, body)
 	}
+	// A rename tells every task the agent coordinates, a done one too; an
+	// archived one takes no events, so it is skipped.
+	if code, body := call(t, server, "POST", "/api/agents/tech-lead/rename", `{"to":"lead"}`); code != 200 {
+		t.Errorf("renaming the archived task's coordinator: %d %s", code, body)
+	}
 }
 
 // Closing an epic by moving it to Done parks its open stories and leaves
@@ -90,7 +107,7 @@ func TestClosingAnEpicSkipsItsArchivedStory(t *testing.T) {
 	if code, body := call(t, server, "POST", "/api/tasks/task-1/direct", `{"to":"done"}`); code != 200 {
 		t.Fatalf("task-1 onto Done: %d %s", code, body)
 	}
-	state.Archive("task-1")
+	storetest.Archive(t, s, state, "task-1")
 
 	if code, body := call(t, server, "POST", "/api/tasks/task-3/direct", `{"to":"done"}`); code != 200 {
 		t.Fatalf("the epic onto Done: %d %s", code, body)
@@ -123,7 +140,7 @@ func TestAnArchivedTaskBlocksNoStory(t *testing.T) {
 	if code, body := call(t, server, "POST", "/api/tasks/task-1/direct", `{"to":"done"}`); code != 200 {
 		t.Fatalf("task-1 onto Done: %d %s", code, body)
 	}
-	state.Archive("task-1")
+	storetest.Archive(t, s, state, "task-1")
 
 	_, body := call(t, server, "GET", "/api/tasks", "")
 	var list []taskSummary

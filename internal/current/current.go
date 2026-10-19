@@ -51,7 +51,7 @@ type State struct {
 	owned       map[string]any               // a feature's stream's state, as its Streams built it, by stream
 	ownedOrder  map[string][]created         // by prefix: each owned stream's first event applied, in the order of their positions
 	broken      map[string]error             // streams whose apply panicked: reads fail, as a replay would
-	archived    map[string]bool              // tasks the state holds no full state for
+	archived    map[string]tasks.Summary     // tasks the state holds as their summary alone, by stream
 	roster      agents.Roster
 	workers     workers.Roster
 	connections connections.Roster
@@ -108,7 +108,7 @@ func (s *State) empty() {
 	s.position, s.streams, s.tasks = 0, map[string]int64{}, map[string]*tasks.Task{}
 	s.created, s.tasksMade = nil, 0
 	s.owned, s.ownedOrder = map[string]any{}, map[string][]created{}
-	s.broken, s.archived = map[string]error{}, map[string]bool{}
+	s.broken, s.archived = map[string]error{}, map[string]tasks.Summary{}
 	s.roster, s.workers, s.connections, s.settings = nil, workers.Roster{}, connections.Roster{}, settings.Default()
 	s.skipped = newTally()
 	s.snapshot, s.tail, s.resumed = nil, nil, 0
@@ -139,7 +139,7 @@ func (s *State) Load(stream string, accepted []events.Event) {
 	kind := s.catalogue.KindOf(stream)
 	for i, e := range accepted {
 		s.skipped.count(s.catalogue, kind, e, i == 0)
-		s.countMade(e)
+		s.countMade(e, i == 0)
 	}
 	if kind == events.ForeignStream {
 		return
@@ -178,6 +178,8 @@ func (s *State) fold(stream string, accepted []events.Event) {
 				s.breaks(stream, err)
 			} else if task != nil {
 				s.tasks[stream] = task
+			} else if summary, archived := tasks.Archived(accepted); archived {
+				s.archived[stream] = summary
 			}
 		}
 	})
@@ -187,10 +189,9 @@ func (s *State) fold(stream string, accepted []events.Event) {
 // and e, as Load does, for an event that changes what came before it
 // (events.Catalogue.Refolds). What the state held for the stream goes, even
 // a broken or archived task, and the position moves as Apply moves it.
-// Clearing the archived summary suits task.unarchived, which brings the task
-// back from its events. A future event.redacted on an archived stream can't
-// clear it by mistake: rules.Check refuses every event on an archived task
-// today.
+// The fold keeps the summary of a task still archived, so task.unarchived
+// brings the task back from its events, and a future event.redacted on an
+// archived stream leaves it archived.
 func (s *State) Refold(stream string, before []events.Event, e events.Event) {
 	defer s.wake()
 	s.mu.Lock()
@@ -200,7 +201,7 @@ func (s *State) Refold(stream string, before []events.Event, e events.Event) {
 	first := s.streams[stream] == 0
 	s.skipped.count(s.catalogue, kind, e, first)
 	s.streams[stream] = e.Position
-	s.countMade(e)
+	s.countMade(e, first)
 	if kind == events.ForeignStream {
 		return
 	}
@@ -254,12 +255,10 @@ func (s *State) Apply(e events.Event) {
 	first := s.streams[e.Stream] == 0
 	s.skipped.count(s.catalogue, kind, e, first)
 	s.streams[e.Stream] = e.Position
-	s.countMade(e)
+	s.countMade(e, first)
 	if kind == events.ForeignStream {
 		return
 	}
-	// The store applies in the log's order, after everything Load or an
-	// earlier Apply gave, so appending keeps the positions in order.
 	s.made(e, kind, first)
 	if s.broken[e.Stream] != nil {
 		return
@@ -286,11 +285,22 @@ func (s *State) Apply(e events.Event) {
 				}
 			} else if kind != events.TaskStream {
 				return
+			} else if e.Type == events.TaskArchived {
+				s.archive(e)
 			} else if task := s.nextTask(s.tasks[e.Stream], e); task != nil {
 				s.tasks[e.Stream] = task
 			}
 		}
 	})
+}
+
+// archive keeps a task as its marker's summary alone, as a replay of its
+// stream ends: tasks.Replay folds it to nil, and tasks.Archived gives the
+// summary.
+func (s *State) archive(marker events.Event) {
+	summary, _ := tasks.Archived([]events.Event{marker})
+	delete(s.tasks, marker.Stream)
+	s.archived[marker.Stream] = summary
 }
 
 // nextTask is tasks.Next, or, while Resume applies the events after a
@@ -308,19 +318,31 @@ func (s *State) nextTask(task *tasks.Task, e events.Event) *tasks.Task {
 
 // made notes where a task.created, or the first event of a stream a
 // feature here owns, is in the log, for the task and owned stream orders.
+// An archived task's task.created row is gone with the rest, so a marker
+// that starts its stream stands for it, at the position it names.
+//
+// The store applies in the log's order, after everything Load or an
+// earlier Apply gave, so appending a task.created keeps the positions in
+// order. A marker's task.created comes before it, so it goes in its place;
+// during Load the order is anyone's until Loaded sorts it.
 func (s *State) made(e events.Event, kind events.StreamKind, first bool) {
-	if e.Type == events.TaskCreated {
+	switch {
+	case e.Type == events.TaskCreated:
 		s.created = append(s.created, created{e.Position, e.Stream})
+	case e.Type == events.TaskArchived && first:
+		c := created{int64(e.Number("created")), e.Stream}
+		at, _ := slices.BinarySearchFunc(s.created, c, byPosition)
+		s.created = slices.Insert(s.created, at, c)
 	}
 	if owner := s.ownerOf(e.Stream, kind); owner != nil && first {
 		s.ownedOrder[owner.Prefix] = append(s.ownedOrder[owner.Prefix], created{e.Position, e.Stream})
 	}
 }
 
-// countMade counts a task.created in any stream, so NextTask names the
-// stream Store.Create would.
-func (s *State) countMade(e events.Event) {
-	if e.Type == events.TaskCreated {
+// countMade counts a task.created in any stream, and a marker that stands
+// for one (see made), so NextTask names the stream Store.Create would.
+func (s *State) countMade(e events.Event, first bool) {
+	if e.Type == events.TaskCreated || e.Type == events.TaskArchived && first {
 		s.tasksMade++
 	}
 }
@@ -404,7 +426,7 @@ func (s *State) StreamPosition(stream string) int64 {
 func (s *State) Task(id string) (*tasks.Task, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.archived[id] {
+	if _, archived := s.archived[id]; archived {
 		return nil, ErrArchived
 	}
 	if err := s.broken[id]; err != nil {
@@ -454,8 +476,8 @@ func (s *State) TaskIDs() []string {
 }
 
 // NextTask is the stream the next task.created goes into: the one
-// Store.Create("task-", ...) names, as both count every task.created. An
-// archiver that deletes rows must keep both counts (see Store.made).
+// Store.Create("task-", ...) names, as both count every task.created, an
+// archived task's through its marker (see Store.made).
 func (s *State) NextTask() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -476,15 +498,23 @@ func (s *State) OwnedIDs(prefix string) []string {
 	return ids
 }
 
-// Archive drops a task's full state: Task then returns ErrArchived, Tasks
-// leaves the task out and TaskIDs still lists it. The archiver will do this
-// as it applies task.archived; no event archives a task yet, so for now
-// only tests call it, to see how each reader takes an archived task.
-func (s *State) Archive(id string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.tasks, id)
-	s.archived[id] = true
+// Summaries is every task as the list shows it, oldest first, in a new
+// slice the caller may sort: a whole task's summary, as tasks.SummaryOf
+// makes it with the roster, and an archived one's, as its marker keeps it.
+// A broken task is left out, as Tasks leaves it out. BlockedBy and Queued
+// need the other tasks, so they are the caller's to fill.
+func (s *State) Summaries() []tasks.Summary {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	all := make([]tasks.Summary, 0, len(s.created))
+	for _, c := range s.created {
+		if summary, archived := s.archived[c.id]; archived {
+			all = append(all, summary)
+		} else if task := s.tasks[c.id]; task != nil && s.broken[c.id] == nil {
+			all = append(all, tasks.SummaryOf(task, s.roster))
+		}
+	}
+	return all
 }
 
 // Roster is every agent. If the agents stream is broken, it is the roster

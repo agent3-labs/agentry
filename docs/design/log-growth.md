@@ -992,11 +992,8 @@ the catalogue, written by Agentry alone; `task.unarchived` refolds its
 stream. The rules (`internal/rules/archive_rules.go`) let an archived task
 take only `task.unarchived`, archive only a done task with a marker whose
 hash and positions make sense, and refuse `task.unarchived` on a whole
-task. The state can't fold a marker until step 6: a task is archived in
-it only by the test helper `State.Archive`, and a replay of a stream that
-is only a marker leaves no task there (no `task.created`), so until step 6
-the next id after a restart would differ between `made` and the rules'
-`NextTask`. Nothing writes a marker outside tests before step 7. Tests:
+task. The state folds the markers since step 6 (below, "Done tasks leave
+the state"). Nothing writes a marker outside tests before step 7. Tests:
 `TestAStrayDeleteIsRefused`, `TestAMarkerAllowsDeletingOnlyTheRowsItCovers`,
 `TestUnarchivingEndsWhatTheMarkerAllows`, `TestAVersionZeroLogMigratesOnce`,
 `TestANewLogStartsAtTheLatestSchema`, `TestALogFromANewerBuildIsNotOpened`
@@ -1158,6 +1155,32 @@ serves the list. Task ids stay in creation order and are never reused:
 the marker's `created` is the `task.created` position the state orders by,
 and the next id counts archived tasks too, through `Store.made`, which
 `Store.Create` calls (section 4, "How it fits").
+
+**Built in step 6.** `tasks.Replay` sets the task aside at a marker and
+takes it back at `task.unarchived` (panicking, so the stream breaks, when
+nothing was set aside), and `tasks.Archived` reads the last marker's
+summary, its id always the stream's. `current.State` folds a marker into
+`archived` on `Load`, `Apply` and `Refold`; a marker that is the first
+event of its stream the state sees stands for the `task.created` that
+went with the rows: it counts for `NextTask` and goes into `created` at
+its `created` position, in order even in a snapshot's tail. `Summaries()`
+lists whole tasks' `SummaryOf` and archived summaries in that order, and
+`/api/tasks` reads it, so an archived task is listed as done with its
+summary. `Equal` compares each summary with `tasks.Archived` of a replay,
+and the snapshot carries the map; a snapshot from before this is another
+build's, and one of the old shape under the same tag fails to decode, so
+either way the log replays. The readers of item 6 already skipped an
+archived task; their tests now archive through a real marker
+(`storetest.Archive`). Measured on a thousand copies of the every-event
+task, the state holds 818 bytes per archived task
+(`TestTheSummaryHeapBenchRunsOnAFixture`; `TestStartupBench` logs the
+same on the synthetic log). Tests: `TestAMarkerAloneFoldsToItsSummary`,
+`TestASnapshotTakesAnUnarchivingInItsTail`,
+`TestASnapshotFromBeforeSummariesReplays`,
+`TestAnArchivedTaskIsCountedButNotHandedOut`,
+`TestUnarchivingTakesBackTheWholeTask` and `TestEqualSeesAWrongSummary`
+in `internal/current`; `TestAnArchivedTaskIsListedAsItsSummary` in
+`internal/web`.
 
 At scale: a task is about 1.2 MB of file today, so 1 GB of history is
 about 900 tasks, and 100 GB about 90,000: some 60 MB of summaries in

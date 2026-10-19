@@ -69,6 +69,7 @@ func TestStartupBench(t *testing.T) {
 		heapLimit/1e6, w.events, len(w.archivable), float64(held)/1e6)
 
 	benchBodyDecode(t, state, w, working)
+	benchSummaries(t, state.Roster(), w.archivable)
 	benchSnapshots(t, path, state, w.archivable, tailEvents)
 }
 

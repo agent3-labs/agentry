@@ -114,6 +114,11 @@ func InPriorityOrder(a, b *Task) int {
 	return cmp.Or(cmp.Compare(a.Rank, b.Rank), b.CreatedAt.Compare(a.CreatedAt))
 }
 
+// SummariesInPriorityOrder is InPriorityOrder for the list's summaries.
+func SummariesInPriorityOrder(a, b Summary) int {
+	return cmp.Or(cmp.Compare(a.Rank, b.Rank), b.CreatedAt.Compare(a.CreatedAt))
+}
+
 // AtBudget says whether the task has used all the tokens it may.
 func (t *Task) AtBudget() bool { return t.Budget > 0 && t.TokensUsed >= t.Budget }
 

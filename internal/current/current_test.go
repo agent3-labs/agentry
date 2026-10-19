@@ -16,6 +16,7 @@ import (
 	"gitlab.com/dev.chempa/agentry/internal/ideas"
 	"gitlab.com/dev.chempa/agentry/internal/settings"
 	"gitlab.com/dev.chempa/agentry/internal/tasks"
+	"gitlab.com/dev.chempa/agentry/internal/tasks/taskstest"
 	"gitlab.com/dev.chempa/agentry/internal/workers"
 )
 
@@ -133,6 +134,12 @@ func sameAsReplay(t *testing.T, s *State, log []events.Event) {
 			continue
 		}
 		task, err := s.Task(stream)
+		if want, archived := tasks.Archived(accepted(log, stream)); archived {
+			if summary, held := s.archived[stream]; !held || !errors.Is(err, ErrArchived) || !reflect.DeepEqual(summary, want) {
+				t.Errorf("%s: %+v, %v\nreplay: archived as %+v", stream, summary, err, want)
+			}
+			continue
+		}
 		if want, replayErr := tasks.Replay(accepted(log, stream)); err != nil || replayErr != nil || !reflect.DeepEqual(task, want) {
 			t.Errorf("%s: %+v, %v\nreplay: %+v, %v", stream, task, err, want, replayErr)
 		}
@@ -264,21 +271,56 @@ func TestTheTaskOrderCountsEveryTaskCreated(t *testing.T) {
 	}
 }
 
-// An archived task says so, leaves the list and still counts in the task
-// order; a broken task keeps its own error.
+// withArchived is everyStream with task-1 archived at the end: its marker
+// keeps the summary the list showed. With rowsGone, task-1's rows are gone
+// from the log, as the archiver leaves them, and the marker alone stands
+// for the task.
+func withArchived(rowsGone bool) []events.Event {
+	log := everyStream()
+	own := accepted(log, "task-1")
+	marker := taskstest.Marker(own, tasks.SummaryOf(tasks.FromEvents(own), nil))
+	if rowsGone {
+		log = slices.DeleteFunc(log, func(e events.Event) bool { return e.Stream == "task-1" })
+	}
+	return append(log, events.Event{Position: 100, At: time.Date(2026, 10, 19, 9, 0, 0, 0, time.UTC), Proposal: marker})
+}
+
+// An archived task says so, leaves the tasks and still counts in the task
+// order and for the next task, with its rows in the log or not, loaded or
+// applied; its summary is in the list in its place. A broken task keeps
+// its own error.
 func TestAnArchivedTaskIsCountedButNotHandedOut(t *testing.T) {
-	s := loaded(everyStream())
-	s.Archive("task-1")
-	if task, err := s.Task("task-1"); task != nil || !errors.Is(err, ErrArchived) {
-		t.Errorf("archived task-1: %v, %v", task, err)
+	// applied from the start, loaded, and applied after a cut where the
+	// marker is the first of its stream the state sees
+	tail := func(log []events.Event) *State {
+		cut := slices.IndexFunc(log, func(e events.Event) bool { return e.Stream == "task-2" })
+		return applyInto(loaded(log[:cut]), log[cut:])
 	}
-	if ids := idsOf(s.Tasks()); !slices.Equal(ids, []string{"task-2"}) {
-		t.Errorf("the tasks are %v, want only task-2", ids)
+	for _, rowsGone := range []bool{false, true} {
+		log := withArchived(rowsGone)
+		for name, s := range map[string]*State{"applied": applied(log), "loaded": loaded(log), "applied after a cut": tail(log)} {
+			name = fmt.Sprintf("%s, rows gone %v", name, rowsGone)
+			sameAsReplay(t, s, log)
+			if task, err := s.Task("task-1"); task != nil || !errors.Is(err, ErrArchived) {
+				t.Errorf("%s: archived task-1: %v, %v", name, task, err)
+			}
+			if ids := idsOf(s.Tasks()); !slices.Equal(ids, []string{"task-2"}) {
+				t.Errorf("%s: the tasks are %v, want only task-2", name, ids)
+			}
+			if order := s.TaskIDs(); !slices.Equal(order, []string{"task-1", "task-2"}) {
+				t.Errorf("%s: the task order is %v, want both tasks", name, order)
+			}
+			if next := s.NextTask(); next != "task-3" {
+				t.Errorf("%s: the next task is %s, want task-3", name, next)
+			}
+			summaries := s.Summaries()
+			if len(summaries) != 2 || summaries[0].ID != "task-1" || summaries[0].Title != "Speed up the list" || summaries[1].ID != "task-2" {
+				t.Errorf("%s: the summaries are %+v, want task-1's as archived, then task-2's", name, summaries)
+			}
+		}
 	}
-	if order := s.TaskIDs(); !slices.Equal(order, []string{"task-1", "task-2"}) {
-		t.Errorf("the task order is %v, want both tasks", order)
-	}
-	s.Apply(events.Event{Position: 100, Proposal: proposal("task-2", worker, events.WorktreeMoved, map[string]any{"worker": "laptop", "path": "/w", "port": float64(7901)})})
+	s := loaded(withArchived(true))
+	s.Apply(events.Event{Position: 101, Proposal: proposal("task-2", worker, events.WorktreeMoved, map[string]any{"worker": "laptop", "path": "/w", "port": float64(7901)})})
 	if _, err := s.Task("task-2"); err == nil || errors.Is(err, ErrArchived) {
 		t.Errorf("a broken task's error: %v", err)
 	}

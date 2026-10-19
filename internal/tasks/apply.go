@@ -27,6 +27,12 @@ func FromEvents(stream []events.Event) *Task {
 // stream, position and event it stopped at. Apply is meant to replay every
 // event the rules ever accepted, so the error is a bug, but one task's
 // stream must not take down the reads of every other.
+//
+// An archived task folds to nil: at its task.archived the task so far is
+// set aside, and Archived gives its summary. A task.unarchived takes back
+// the task set aside, rebuilt from the restored rows before the marker in
+// the same stream (docs/design/log-growth.md, "Reopening an archived
+// task"); with none set aside the stream can't be replayed.
 func Replay(stream []events.Event) (t *Task, err error) {
 	var e events.Event
 	defer func() {
@@ -34,9 +40,19 @@ func Replay(stream []events.Event) (t *Task, err error) {
 			t, err = nil, fmt.Errorf("applying %s to %s at %d: %v", e.Type, e.Stream, e.Position, recovered)
 		}
 	}()
+	var aside *Task
 	for _, e = range stream {
-		if e.Type == events.TaskCreated {
+		switch e.Type {
+		case events.TaskCreated:
 			t = &Task{ID: e.Stream, CreatedAt: e.At}
+		case events.TaskArchived:
+			t, aside = nil, t
+			continue
+		case events.TaskUnarchived:
+			if aside == nil {
+				panic("no task before its marker to take back")
+			}
+			t, aside = aside, nil
 		}
 		if t != nil {
 			t.Apply(e)

@@ -128,15 +128,25 @@ func TestACrashIsFlaggedAfterTheGrace(t *testing.T) {
 	}
 }
 
-// An archived task is done, so the watchdog skips it as it skips a done
-// task, though this one's turn is still open and its process is gone.
+// An archived task is done and held as its summary alone, so the watchdog
+// skips it as it skips a done task, though its process is gone.
 func TestAnArchivedTaskIsLeftAlone(t *testing.T) {
 	w := newWorld(t)
 	w.alive = false
-	w.state.Archive("task-1")
-	if issue := w.after(time.Hour); issue != "" || w.stopped {
-		t.Errorf("issue %q, stopped %v", issue, w.stopped)
+	storetest.Archive(t, w.store, w.state, "task-1")
+	if wrote := w.proposedAfter(time.Hour); wrote != 0 || w.stopped {
+		t.Errorf("wrote %d events, stopped %v", wrote, w.stopped)
 	}
+}
+
+// proposedAfter runs the watchdog as if d had passed, and returns how many
+// events it proposed, refused ones included: for an archived task, which
+// has no turn left to read an issue from.
+func (w *world) proposedAfter(d time.Duration) int64 {
+	before := w.store.LastPosition()
+	w.dog.Check(time.Now().Add(d))
+	w.dog.Wait()
+	return w.store.LastPosition() - before
 }
 
 func TestASilentTurnIsAStall(t *testing.T) {
@@ -239,18 +249,18 @@ func TestALimitedTurnIsRetriedOnceJustAfterTheReset(t *testing.T) {
 	}
 }
 
-// A task archived while its turn waits for a usage limit is done: nothing
+// A task archived after its turn waited for a usage limit is done: nothing
 // resumes it or types into it when the limit resets.
 func TestALimitedTaskArchivedIsNotRetried(t *testing.T) {
 	w := newWorld(t)
 	w.limit(at(30 * time.Minute))
-	w.state.Archive("task-1")
-	if issue := w.after(2 * time.Hour); issue != "" || w.stopped || len(w.typed) != 0 {
-		t.Errorf("issue %q, stopped %v, typed %q", issue, w.stopped, w.typed)
+	storetest.Archive(t, w.store, w.state, "task-1")
+	if wrote := w.proposedAfter(2 * time.Hour); wrote != 0 || w.stopped || len(w.typed) != 0 {
+		t.Errorf("wrote %d events, stopped %v, typed %q", wrote, w.stopped, w.typed)
 	}
 	stream, _ := w.store.Stream("task-1")
-	if last := stream[len(stream)-1]; last.Type != events.TurnLimited {
-		t.Errorf("nothing should follow the limit, got %s", last.Type)
+	if last := stream[len(stream)-1]; last.Type != events.TaskArchived {
+		t.Errorf("nothing should follow the marker, got %s", last.Type)
 	}
 }
 

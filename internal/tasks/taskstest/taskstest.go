@@ -99,3 +99,21 @@ func EveryEvent() []events.Event {
 	log = add(log, you, events.TaskDone, "", map[string]any{"summary": "Moved.", "moved": true}) // stops turn-6, a wrap-up is owed
 	return slices.Clip(log)
 }
+
+// Blob stands for an archive's hash in a test's markers.
+const Blob = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+// Marker archives a task as the archiver will (docs/design/log-growth.md
+// section 4): a task.archived covering accepted, the task's stream so far,
+// keeping summary, which is what tasks.SummaryOf gave for it.
+func Marker(accepted []events.Event, summary any) events.Proposal {
+	return events.Proposal{Stream: accepted[0].Stream, Actor: events.Actor{Kind: events.System, ID: "archiver"}, Type: events.TaskArchived,
+		Data: map[string]any{"through": accepted[len(accepted)-1].Position, "count": len(accepted), "archive": Blob,
+			"created": accepted[0].Position, "summary": summary}}
+}
+
+// Unarchived undoes the marker at position marker, as Store.Unarchive will.
+func Unarchived(stream string, marker int64) events.Proposal {
+	return events.Proposal{Stream: stream, Actor: events.Actor{Kind: events.System, ID: "archiver"}, Type: events.TaskUnarchived,
+		Data: map[string]any{"marker": marker, "archive": Blob}}
+}

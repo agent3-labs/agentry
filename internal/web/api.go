@@ -24,17 +24,18 @@ import (
 	"gitlab.com/dev.chempa/agentry/internal/worktrees"
 )
 
+// listTasks lists every task's summary, an archived task's too: it is done,
+// so nothing blocks it and it waits for no slot.
 func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
-	roster, err := s.roster()
-	if err != nil {
+	if _, err := s.roster(); err != nil {
 		httpapi.Failed(w, err)
 		return
 	}
-	all := s.state.Tasks()
-	slices.SortStableFunc(all, tasks.InPriorityOrder)
+	summaries := s.state.Summaries()
+	slices.SortStableFunc(summaries, tasks.SummariesInPriorityOrder)
 	done := map[string]bool{}
-	for _, task := range all {
-		done[task.ID] = task.IsDone
+	for _, summary := range summaries {
+		done[summary.ID] = summary.Status == tasks.Done
 	}
 	isDone := func(id string) bool {
 		if isDone, listed := done[id]; listed {
@@ -43,12 +44,11 @@ func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 		return s.isDone(id)
 	}
 	slots := s.slots()
-	summaries := []taskSummary{}
-	for _, task := range all {
-		summary := tasks.SummaryOf(task, roster)
-		summary.BlockedBy = blockedBy(task, isDone)
-		summary.Queued = slots.Queued(task.ID)
-		summaries = append(summaries, summary)
+	for i, summary := range summaries {
+		if task, _ := s.state.Task(summary.ID); task != nil {
+			summaries[i].BlockedBy = blockedBy(task, isDone)
+			summaries[i].Queued = slots.Queued(task.ID)
+		}
 	}
 	httpapi.Reply(w, summaries)
 }

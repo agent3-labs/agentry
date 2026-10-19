@@ -10,6 +10,8 @@ import (
 	"gitlab.com/dev.chempa/agentry/internal/events"
 	"gitlab.com/dev.chempa/agentry/internal/ideas"
 	"gitlab.com/dev.chempa/agentry/internal/store"
+	"gitlab.com/dev.chempa/agentry/internal/tasks"
+	"gitlab.com/dev.chempa/agentry/internal/tasks/taskstest"
 )
 
 // openStore is a real store with no order check, so it also takes events
@@ -182,6 +184,40 @@ func TestEqualSeesAWrongDoneAt(t *testing.T) {
 	state.tasks["task-1"] = wrong
 	if err := Equal(s, state); err == nil || err.Error() != "task-1: field DoneAt differs from a replay" {
 		t.Errorf("Equal with task-1's DoneAt wrong: %v", err)
+	}
+}
+
+// Equal compares an archived task's summary with its marker's, and sees a
+// summary the state lost, or a task it holds whole that the log archived.
+func TestEqualSeesAWrongSummary(t *testing.T) {
+	s := openStore(t, someProposals()...)
+	own, err := s.Stream("task-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	propose(t, s, taskstest.Marker(own, tasks.SummaryOf(tasks.FromEvents(own), nil)))
+	for _, c := range []struct {
+		name   string
+		change func(state *State)
+		want   string
+	}{
+		{"a field", func(state *State) {
+			summary := state.archived["task-1"]
+			summary.Title = "Other"
+			state.archived["task-1"] = summary
+		}, "task-1: field Title differs from a replay"},
+		{"the whole task", func(state *State) {
+			delete(state.archived, "task-1")
+			state.tasks["task-1"] = tasks.FromEvents(own)
+		}, "task-1: the state differs from a replay"},
+	} {
+		state := New(withIdeas, ideas.Streams())
+		state.Loaded(0)
+		fromTheLog(t, s, state)
+		c.change(state)
+		if err := Equal(s, state); err == nil || err.Error() != c.want {
+			t.Errorf("%s wrong: %v, want %q", c.name, err, c.want)
+		}
 	}
 }
 

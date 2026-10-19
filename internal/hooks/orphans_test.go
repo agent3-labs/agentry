@@ -71,7 +71,7 @@ func TestARestartSkipsAnArchivedTask(t *testing.T) {
 			t.Fatal(p.Type, rejection, err)
 		}
 	}
-	state.Archive("task-1")
+	storetest.Archive(t, s, state, "task-1")
 	before := s.LastPosition()
 
 	if err := HoldOrphanedAsks(s, state); err != nil {
