@@ -2,9 +2,11 @@
 // height) live in this browser only. Storage may be unavailable, as in a
 // private window: then a setting lasts until the tab closes.
 
+import { storage } from "@/lib/host";
+
 export function readStored(key: string): string | null {
   try {
-    return localStorage.getItem(key);
+    return storage().getItem(key);
   } catch {
     return null;
   }
@@ -12,7 +14,7 @@ export function readStored(key: string): string | null {
 
 export function writeStored(key: string, value: string): void {
   try {
-    localStorage.setItem(key, value);
+    storage().setItem(key, value);
   } catch {
     // not kept; see above
   }

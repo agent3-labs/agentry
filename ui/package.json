@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:demo": "tsc --noEmit && vite build --config vite.demo.config.ts",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write src",
     "test": "vitest run",

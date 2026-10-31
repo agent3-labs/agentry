@@ -150,6 +150,14 @@ describe("TaskPage for a live task", () => {
 describe("TaskPage's ids", () => {
   const ids = () => screen.getAllByText(/^(task|epic)-\d+$/).map((shown) => shown.textContent);
 
+  test("opens the workspace in a new tab that can't reach this one", () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    page(detail({ worktree: { worker: "local", path: "/work/task-1", branch: "agentry/task-1", base: "dev", port: 7901 } }));
+    fireEvent.click(screen.getByRole("button", { name: "Workspace" }));
+    expect(open).toHaveBeenCalledWith("/tasks/task-1/workspace", "_blank", "noopener");
+    open.mockRestore();
+  });
+
   test("shows an epic as epic-N, in the header and its details", () => {
     page(detail({ kind: "epic" }), "details");
     expect(ids()).toEqual(["epic-1", "epic-1"]);

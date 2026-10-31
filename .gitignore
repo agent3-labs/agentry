@@ -20,3 +20,6 @@ internal/web/static/dist/
 
 # Launch videos: the brag skill writes them here
 brag-output/
+
+# The demo build: `npm run build:demo` writes it, for a website to serve
+ui/dist-demo/

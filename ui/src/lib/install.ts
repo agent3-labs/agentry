@@ -9,6 +9,7 @@
 // such as Firefox in a private window, or Brave.
 
 import { useSyncExternalStore } from "react";
+import { registerWorker } from "@/lib/host";
 
 interface InstallPromptEvent extends Event {
   prompt(): Promise<void>;
@@ -28,7 +29,7 @@ const changed = () => listeners.forEach((listener) => listener());
 export function watchInstall(): void {
   if ("serviceWorker" in navigator) {
     // The page works without it, only not as an app.
-    navigator.serviceWorker.register("/sw.js").catch(() => {
+    registerWorker("/sw.js").catch(() => {
       workerRefused = true;
       changed();
     });

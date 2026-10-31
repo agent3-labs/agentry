@@ -1,4 +1,4 @@
-import { createBrowserRouter, Navigate, RouterProvider, useSearchParams } from "react-router-dom";
+import { Navigate, RouterProvider, useSearchParams } from "react-router-dom";
 import { AdminShell } from "@/shell/AdminShell";
 import { SignedIn } from "@/shell/SignedIn";
 import { ToastProvider } from "@/shell/Toasts";
@@ -17,12 +17,13 @@ import { NotFoundPage } from "@/shell/NotFoundPage";
 import { ErrorPage } from "@/shell/ErrorPage";
 import { WorkspacePage } from "@/domains/tasks/workspace/WorkspacePage";
 import { EXTENSIONS } from "@/extensions";
+import { createRouter, Frame } from "@/lib/host";
 
 // Every page renders inside the one shell. The Go server answers any path
 // that isn't the API or a file with index.html, so these addresses can be
 // bookmarked and reloaded. An extension's routes are there whether or not it
 // shows, so a bookmark to one still opens.
-const router = createBrowserRouter([
+const router = createRouter([
   // A task's Workspace is its own page, in its own tab.
   { path: "/tasks/:taskId/workspace", element: <WorkspacePage />, errorElement: <ErrorPage /> },
   {
@@ -66,7 +67,9 @@ export function App() {
     <SignedIn>
       <LiveProvider>
         <ToastProvider>
-          <RouterProvider router={router} />
+          <Frame>
+            <RouterProvider router={router} />
+          </Frame>
         </ToastProvider>
       </LiveProvider>
     </SignedIn>

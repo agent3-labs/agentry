@@ -6,6 +6,7 @@
 // especially, may keep only that. So only a 401 means signed out.
 
 import type { PolicyChange, Settings, SigninCode, TriedCall } from "@/api/types";
+import { request, storage } from "@/lib/host";
 
 const tokenKey = "agentry-token";
 
@@ -24,8 +25,8 @@ function takeFromAddress(name: string): string {
 
 function keep(value: string) {
   try {
-    if (value) localStorage.setItem(tokenKey, value);
-    else localStorage.removeItem(tokenKey);
+    if (value) storage().setItem(tokenKey, value);
+    else storage().removeItem(tokenKey);
   } catch {
     // storage is off: the page keeps the token until it closes, the cookie longer
   }
@@ -33,7 +34,7 @@ function keep(value: string) {
 
 function kept(): string {
   try {
-    return localStorage.getItem(tokenKey) ?? "";
+    return storage().getItem(tokenKey) ?? "";
   } catch {
     return "";
   }
@@ -109,7 +110,7 @@ async function refusal(response: Response): Promise<ApiError> {
 // SignedOutError, anything else as an ApiError with the server's reason.
 export async function send(path: string, init: RequestInit & { headers?: Record<string, string> }): Promise<Response> {
   const sentIn = session;
-  const response = await fetch(path, { ...init, headers: { ...init.headers, ...authorization() } });
+  const response = await request(path, { ...init, headers: { ...init.headers, ...authorization() } });
   if (response.status === 401) {
     if (sentIn === session) setSignedOut(true);
     throw new SignedOutError();
@@ -132,7 +133,7 @@ export async function api<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: st
 // keeps it. When the server refuses, it throws the server's reason: a wrong
 // or used code, or too many tries.
 export async function signIn(given: { code: string } | { token: string }): Promise<void> {
-  const response = await fetch("/api/signin", {
+  const response = await request("/api/signin", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(given),
