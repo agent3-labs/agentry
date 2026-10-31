@@ -3,7 +3,7 @@ Feature: The agents' turns
   worktree and session: what each one's turn does.
   # Sources: internal/runtime/turns, internal/domain/agents, internal/runtime/coordinator/brief.go,
   # internal/runtime/coordinator/brief_finish.go, internal/runtime/coordinator/brief_notes.go, internal/runtime/coordinator/brief_plan.go,
-  # internal/runtime/coordinator/brief_task.go,
+  # internal/runtime/coordinator/brief_task.go, internal/runtime/coordinator/notes.go,
   # internal/runtime/coordinator/checks.go, internal/domain/policy/hooks/handler.go and their tests.
 
   # ---- Every agent's turn ----------------------------------------------------
@@ -71,6 +71,7 @@ Feature: The agents' turns
     When the engineer's turn ends with "This repo formats with gofmt -s." in that file
     Then the engineer's knowledge is exactly that text, recorded once, by the engineer
     # not under test, checked by hand: its next brief shows the same notes under "What you know from earlier tasks": internal/runtime/coordinator/brief_notes.go knowledge, line 18
+    # a section headed "## task-N" or "## epic-N" shows there as its heading and size only, and stays in the file: internal/runtime/coordinator/notes_test.go TestTheBriefCarriesGeneralNotesAndOnlyAnIndexOfTaskNotes
     # KnowledgeFile: internal/runtime/machines/local.go; knowledge: internal/runtime/coordinator/brief_notes.go
 
   # ---- The engineer, the reviewer and the tester -----------------------------
