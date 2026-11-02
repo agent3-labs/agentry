@@ -13,7 +13,7 @@
 
 services:
   agentry-server-dev:
-    image: registry.gitlab.com/dev.chempa/agentry:dev
+    image: registry.gitlab.com/agent3-labs/agentry:dev
     # Reaps the processes agents leave behind: tmux servers, engines, tests.
     init: true
     environment:
