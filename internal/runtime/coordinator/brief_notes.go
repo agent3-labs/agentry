@@ -15,9 +15,15 @@ func keepYourNotes(b *strings.Builder) {
 
 // knowledge is the agent's notes from earlier tasks, and how to keep them.
 func knowledge(b *strings.Builder, agent agents.Agent) {
-	notes := agent.Knowledge
-	if notes == "" {
+	notes, earlier := notesForBrief(agent.Knowledge)
+	if notes == "" && len(earlier) == 0 {
 		notes = "(Nothing yet.)"
+	}
+	if len(earlier) > 0 {
+		notes += "\n\nYour notes on earlier tasks are in " + machines.KnowledgeFile + ", not here, to keep this brief short. " +
+			"Open a section only when this task needs it (search the file for its heading). The file holds all your notes, " +
+			"more than this brief shows: change it in place and never write it out again from this brief.\n\n- " +
+			strings.Join(earlier, "\n- ")
 	}
 	section(b, "What you know from earlier tasks", notes+"\n\n"+
 		"These notes are yours, kept across tasks, in "+machines.KnowledgeFile+". Before you finish, update that file: add what "+
