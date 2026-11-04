@@ -32,6 +32,7 @@ The glossary gives each noun Agentry uses its one meaning, so the scenarios can 
 | `spec/functional/notifications.feature` | pushes to the user's devices |
 | `spec/functional/settings.feature` | the Settings page and redacting a text |
 | `spec/functional/claude-code-tools.feature` | Agentry used from Claude Code: the install, the MCP tools and the status line |
+| `spec/functional/demo.feature` | the demo build: Agentry's pages on a pretend server in the browser, for a website |
 | `spec/non-functional/reliability.feature` | what happens when a turn, a process or a machine fails |
 | `spec/non-functional/security.feature` | sign-in, credentials, the gate and what no agent may do |
 | `spec/non-functional/operations.feature` | running Agentry: the policy file, the settings, the log and its upkeep |
@@ -65,6 +66,7 @@ Every scenario is tagged with an ID: the prefix of its file, a dash and a number
 | `notifications.feature` | `@NOTIFY-nn` |
 | `settings.feature` | `@SET-nn` |
 | `claude-code-tools.feature` | `@TOOLS-nn` |
+| `demo.feature` | `@DEMO-nn` |
 | `reliability.feature` | `@REL-nn` |
 | `security.feature` | `@SEC-nn` |
 | `operations.feature` | `@OPS-nn` |

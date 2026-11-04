@@ -32,6 +32,7 @@ var functionalPrefixes = map[string]string{
 	"notifications.feature":            "NOTIFY",
 	"settings.feature":                 "SET",
 	"claude-code-tools.feature":        "TOOLS",
+	"demo.feature":                     "DEMO",
 }
 
 var nonFunctionalPrefixes = map[string]string{

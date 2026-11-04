@@ -6,6 +6,7 @@ import { Hand, Undo2 } from "lucide-react";
 import { Button } from "@/components/atoms/Button";
 import { StatusDot, DotTone } from "@/components/atoms/StatusDot";
 import { terminalTheme } from "@/lib/terminal-theme";
+import { openSocket } from "@/lib/host";
 
 // A live terminal session over a websocket (internal/platform/terminal). Everyone
 // watches; Take control sends your keys, and the server drops keys from
@@ -51,7 +52,7 @@ export function TerminalView({ url, title, takeControlOnConnect = false }: Termi
     term.loadAddon(fit);
     term.open(screen.current!);
 
-    const ws = new WebSocket(url);
+    const ws = openSocket(url);
     ws.binaryType = "arraybuffer";
     socket.current = ws;
     const send = (message: object) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(message));

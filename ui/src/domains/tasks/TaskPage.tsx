@@ -57,6 +57,7 @@ import { useNow } from "@/live/use-now";
 import { useTaskCommits, useTaskLinks } from "@/live/refs";
 import { COLUMN_TITLES, stageOf } from "@/lib/columns";
 import { EXTENSIONS, extensionLink } from "@/extensions";
+import { pageURL } from "@/lib/host";
 
 // A task in full. The header and a strip of facts stay put. Under them, on
 // the left, the agents' plans stay on every tab; on the right, the path of
@@ -298,7 +299,15 @@ export function TaskPage() {
           </>
         }
         actions={[
-          ...(w ? [{ label: "Workspace", icon: <FolderGit2 />, onClick: () => window.open(`/tasks/${task.id}/workspace`, "_blank") }] : []),
+          ...(w
+            ? [
+                {
+                  label: "Workspace",
+                  icon: <FolderGit2 />,
+                  onClick: () => window.open(pageURL(`/tasks/${task.id}/workspace`), "_blank", "noopener"),
+                },
+              ]
+            : []),
           ...(working ? [{ label: "Terminal", icon: <SquareTerminal />, onClick: watch }] : []),
           { label: "Redact a text", icon: <EyeOff />, onClick: () => setRedacting(markedText()) },
         ]}

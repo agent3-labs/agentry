@@ -5,6 +5,7 @@
 
 import { api, ApiError } from "@/api/client";
 import type { PushStatus } from "@/api/types";
+import { registerWorker } from "@/lib/host";
 
 // browserReason says why this browser can't take pushes here, or "" when it
 // can. Browsers have no PushManager on a page that isn't secure, and some
@@ -42,7 +43,7 @@ export async function subscribe(publicKey: string): Promise<PushSubscription> {
   if ((await Notification.requestPermission()) !== "granted") {
     throw new Error("Notifications weren't allowed.");
   }
-  await navigator.serviceWorker.register("/sw.js"); // the one the page has, or again if it was refused
+  await registerWorker("/sw.js"); // the one the page has, or again if it was refused
   const registration = await navigator.serviceWorker.ready;
   const subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: fromBase64url(publicKey) });
   await send(subscription);

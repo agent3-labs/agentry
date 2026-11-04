@@ -3,6 +3,7 @@
 // is told too, so the sessions it starts suit the terminals showing them.
 
 import { api } from "@/api/client";
+import { storage } from "@/lib/host";
 
 export type Theme = "dark" | "light";
 
@@ -10,7 +11,7 @@ const key = "agentry-theme";
 
 export function savedTheme(): Theme {
   try {
-    return localStorage.getItem(key) === "light" ? "light" : "dark";
+    return storage().getItem(key) === "light" ? "light" : "dark";
   } catch {
     return "dark";
   }
@@ -22,7 +23,7 @@ export function applyTheme(theme: Theme): void {
   document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "light" ? "#fafafa" : "#16181d");
   api("POST", "/api/theme", { theme }).catch(() => {}); // not signed in yet: the next change tells it
   try {
-    localStorage.setItem(key, theme);
+    storage().setItem(key, theme);
   } catch {
     // a private window: the theme lasts until the tab closes
   }
